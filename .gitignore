@@ -1,0 +1,10 @@
+.DS_Store
+*.egg-info/
+/*.lock
+/.*_cache/
+/.coverage
+/.tox/
+/.venv/
+/build/
+/dist/
+__pycache__/
