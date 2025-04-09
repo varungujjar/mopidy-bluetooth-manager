@@ -1,5 +1,5 @@
 [project]
-name = "mopidy-bluetooth"
+name = "mopidy-bluetooth-manager"
 description = "Mopidy extension for rendering audio from Bluetooth devices"
 readme = "README.md"
 requires-python = ">= 3.11"
@@ -20,7 +20,7 @@ dependencies = ["mopidy >= 4.0.0a4", "pykka >= 4", "requests >= 2.20.0"]
 Homepage = "https://github.com/varungujjar/mopidy-bluetooth"
 
 [project.entry-points."mopidy.ext"]
-bluetooth = "mopidy_bluetooth:Extension"
+bluetooth_manager = "mopidy_bluetooth_manager:Extension"
 
 
 [build-system]
