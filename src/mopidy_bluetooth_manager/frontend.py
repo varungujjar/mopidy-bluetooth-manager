@@ -11,7 +11,7 @@ import tornado.ioloop
 import tornado.web
 import tornado.websocket
 
-from .bluetoothctl import BluetoothCtlController 
+from .bluez_dbus import BluetoothDbusController 
 
 import mopidy
 from mopidy.models import Album, Artist, Track, TlTrack
@@ -34,7 +34,7 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
         self.running = True
         self.last_event = ""
         self.uri= ""
-        self.bluetooth_controller = BluetoothCtlController(core, config)
+        self.bluetooth_controller = BluetoothDbusController(core, config) #To be replaced with Python D-Bus Implementation in future.
 
 
     def on_event(self, event, **kwargs):
@@ -44,24 +44,35 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
 
     def on_start(self):
         # CoreListener.send("bluetooth_loaded")
+        # threading.Thread(target=self.monitor_bluetoothctl, daemon=True).start()
         self.bluetooth_controller.on_start()
-        logger.info("Bluetooth renderer: Initialized")
+        logger.info("Bluetooth Manager: Initialized")
 
 
     def on_stop(self):
         self.running = False
-        logger.info("Librespot event listener stopped.")
 
 
 def make_jsonrpc_wrapper(core: CoreProxy, config) -> jsonrpc.Wrapper:
     return jsonrpc.Wrapper(
         objects={
-            "bluetooth.scan": BluetoothCtlController(core, config).scan_devices,
-            "bluetooth.connect": BluetoothCtlController(core, config).connect_device,
-            "bluetooth.disconnect": BluetoothCtlController(core, config).disconnect_device,
-            "bluetooth.remove": BluetoothCtlController(core, config).remove_device,
+            "bluetooth.scan": BluetoothDbusController(core, config).scan_devices,
+            "bluetooth.connect": BluetoothDbusController(core, config).connect_device,
+            "bluetooth.disconnect": BluetoothDbusController(core, config).disconnect_device,
+            "bluetooth.trust": BluetoothDbusController(core, config).trust_devices,
+            "bluetooth.remove": BluetoothDbusController(core, config).remove_device,
+            "bluetooth.devices": BluetoothDbusController(core, config).get_devices,
+            "bluetooth.info": BluetoothDbusController(core, config).get_device_info,
+            "bluetooth.player": BluetoothDbusController(core, config).get_device_player,
+            "bluetooth.player.play": BluetoothDbusController(core, config).player_play,
+            "bluetooth.player.pause": BluetoothDbusController(core, config).player_pause,
+            "bluetooth.player.stop": BluetoothDbusController(core, config).player_stop,
+            "bluetooth.player.prev": BluetoothDbusController(core, config).player_prev,
+            "bluetooth.player.next": BluetoothDbusController(core, config).player_next,
         },
     )
+
+
 
 
 class JsonRpcHandler(tornado.web.RequestHandler):

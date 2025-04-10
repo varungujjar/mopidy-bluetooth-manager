@@ -20,7 +20,7 @@ dependencies = ["mopidy >= 4.0.0a4", "pykka >= 4", "requests >= 2.20.0"]
 Homepage = "https://github.com/varungujjar/mopidy-bluetooth"
 
 [project.entry-points."mopidy.ext"]
-bluetooth_manager = "mopidy_bluetooth_manager:Extension"
+bluetooth-manager = "mopidy_bluetooth_manager:Extension"
 
 
 [build-system]
@@ -44,7 +44,7 @@ typing = ["pyright"]
 source = ["src/", "*/site-packages/"]
 
 [tool.coverage.run]
-source_pkgs = ["mopidy_spotify_render"]
+source_pkgs = ["mopidy_bluetooth_manager"]
 
 [tool.coverage.report]
 show_missing = true
@@ -62,7 +62,7 @@ reportPrivateImportUsage = false
 [tool.pytest.ini_options]
 filterwarnings = [
     # By default, fail tests on warnings from our own code
-    "error:::mopidy_spotify_render",
+    "error:::mopidy_bluetooth_manager",
     #
     # Add any warnings you want to ignore here
 ]
