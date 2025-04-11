@@ -26,6 +26,7 @@ from typing import ClassVar
 logger = logging.getLogger(__name__)
 
 
+
 class BluetoothManager(pykka.ThreadingActor, CoreListener):
     def __init__(self, config, core):
         super().__init__()
@@ -35,35 +36,29 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
         self.last_event = ""
         self.uri= ""
         self.bluetooth_controller = BluetoothDbusController(core, config) #To be replaced with Python D-Bus Implementation in future.
-
+        self.dbus_thread = None
+        
 
     def on_event(self, event, **kwargs):
         """Handle Mopidy events"""
-        print(f"Received event: {event}")
-
+        print(f"Received event: {event} {kwargs}")
 
     def on_start(self):
-        # CoreListener.send("bluetooth_loaded")
-        # threading.Thread(target=self.monitor_bluetoothctl, daemon=True).start()
-        self.bluetooth_controller.on_start()
+        threading.Thread(target=self.bluetooth_controller.start_dbus_listener(), daemon=True).start()
         logger.info("Bluetooth Manager: Initialized")
-
-
-    def on_stop(self):
-        self.running = False
 
 
 def make_jsonrpc_wrapper(core: CoreProxy, config) -> jsonrpc.Wrapper:
     return jsonrpc.Wrapper(
         objects={
-            "bluetooth.scan": BluetoothDbusController(core, config).scan_devices,
-            "bluetooth.connect": BluetoothDbusController(core, config).connect_device,
-            "bluetooth.disconnect": BluetoothDbusController(core, config).disconnect_device,
-            "bluetooth.trust": BluetoothDbusController(core, config).trust_devices,
-            "bluetooth.remove": BluetoothDbusController(core, config).remove_device,
+            "bluetooth.adapter.discover": BluetoothDbusController(core, config).discover_devices,
             "bluetooth.devices": BluetoothDbusController(core, config).get_devices,
-            "bluetooth.info": BluetoothDbusController(core, config).get_device_info,
-            "bluetooth.player": BluetoothDbusController(core, config).get_device_player,
+            "bluetooth.devices.info": BluetoothDbusController(core, config).get_device,
+            "bluetooth.devices.connect": BluetoothDbusController(core, config).device_connect,
+            "bluetooth.devices.disconnect": BluetoothDbusController(core, config).device_disconnect,
+            "bluetooth.devices.trust": BluetoothDbusController(core, config).device_trust,
+            "bluetooth.devices.remove": BluetoothDbusController(core, config).device_remove,
+            "bluetooth.player": BluetoothDbusController(core, config).get_player,
             "bluetooth.player.play": BluetoothDbusController(core, config).player_play,
             "bluetooth.player.pause": BluetoothDbusController(core, config).player_pause,
             "bluetooth.player.stop": BluetoothDbusController(core, config).player_stop,
