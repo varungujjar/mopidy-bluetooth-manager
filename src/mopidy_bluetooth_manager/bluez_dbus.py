@@ -1,11 +1,12 @@
 
 import logging
 import pydbus
+import time
 from mopidy.core.listener import CoreListener
 
 from gi.repository import GLib, GObject
 
-discovery_time = 10
+discovery_time = 20
 mainloop = GLib.MainLoop()
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,13 @@ class BluetoothDbusController():
             if "Status" in properties:
                 CoreListener.send("playback_status_changed", status=properties["Status"])
 
-            if "Connected" in properties:
+            if "Connected" in properties and not "Player" in properties:
                 value = properties.get("Connected")
                 if value:
                     CoreListener.send("network_status_changed", connected=value, device=self.get_device(interface))
                     CoreListener.send("input_source_changed", source='bluetooth')
+                    print(interface, properties)
+                    self.handle_incoming_device_request(self.get_device(interface))
                 else:
                     CoreListener.send("network_status_changed", connected=value, device=self.get_device(interface))
                
@@ -77,6 +80,27 @@ class BluetoothDbusController():
             raise RuntimeError(f"Failed to change adapter power state")
 
 
+    def adapter_set_name(self, name):
+        """Sets Name to bluetooth device """
+
+        try:
+            logger.info(f"Starting bluetooth with name {name}")
+            name_alias = GLib.Variant("s", name)
+            adapter.Set("org.bluez.Adapter1","Alias", name_alias)
+
+            return True
+        except Exception:
+                raise RuntimeError(f"Failed to set device name {name}")
+        
+    def set_discoverable(self):
+        try:
+            adapter.Set("org.bluez.Adapter1", "Discoverable", GLib.Variant("b", True))
+            adapter.Set("org.bluez.Adapter1", "Pairable", GLib.Variant("b", True))
+            return True
+        except Exception:
+            raise RuntimeError(f"Failed to set discoverable")
+
+
     def discover_devices(self):
         """Scan for trusted Bluetooth devices and return a list of device Name and MAC addresses."""
         logger.info("Scanning for available Bluetooth devices...")
@@ -84,32 +108,13 @@ class BluetoothDbusController():
             """Handler for end of discovery"""
             mainloop.quit()
             adapter.StopDiscovery()
-        try:
-            adapter.StartDiscovery()
-            GLib.timeout_add_seconds(discovery_time, end_discovery)
-            mainloop.run()
 
-            mng_objs = mngr.GetManagedObjects()       
-            devices = []
-            for path in mng_objs:
-                device = mng_objs[path].get('org.bluez.Device1')
-                if device and device.get('Name'):
-                    devices.append({
-                        "name": device.get("Name"),
-                        "address": device.get("Address"),
-                        "alias": device.get("Alias"),
-                        "icon": device.get("Icon"),
-                        "path": path
-                    })
-            self.devices = devices
-            logger.info(f"Found ({len(devices)}) Bluetooth devices.")
-            return devices
-        except Exception:
-            raise RuntimeError(f"Failed to scan for bluetooth devices")
+        self.adapter_power(True)
+        self.set_discoverable()
+        adapter.StartDiscovery()
+        GLib.timeout_add_seconds(discovery_time, end_discovery)
+        mainloop.run()
 
-
-    def get_devices(self):
-        """Gets the list of devices cached from last scan"""
         mng_objs = mngr.GetManagedObjects()       
         devices = []
         for path in mng_objs:
@@ -120,7 +125,27 @@ class BluetoothDbusController():
                     "address": device.get("Address"),
                     "alias": device.get("Alias"),
                     "icon": device.get("Icon"),
-                    "path": path,
+                    "device_path": path
+                })
+        self.devices = devices
+        logger.info(f"Found ({len(devices)}) Bluetooth devices.")
+        return devices
+       
+
+
+    def get_devices(self):
+        """Gets the list of devices cached from last scan"""
+        mng_objs = mngr.GetManagedObjects()       
+        devices = []
+        for path in mng_objs:
+            device = mng_objs[path].get('org.bluez.Device1')
+            if device and device.get('Name'):
+                devices.append({
+                    "device_path": path,
+                    "name": device.get("Name"),
+                    "address": device.get("Address"),
+                    "alias": device.get("Alias"),
+                    "icon": device.get("Icon"),
                     "connected":device.get("Connected")
                 })
         return devices
@@ -134,11 +159,11 @@ class BluetoothDbusController():
             try:
                 device = bus.get(bluez_service, device_path)
                 return {
+                            "device_path": device_path,
                             "adapter": device.Adapter,
                             "alias": device.Alias,
                             "address": device.Address,
                             "icon": device.Icon,
-                            "path": device_path,
                             "paired": device.Paired,
                             "trusted": device.Trusted,
                             "class": device.Class,
@@ -152,30 +177,41 @@ class BluetoothDbusController():
                 device = mng_objs[path].get('org.bluez.Device1')
                 if device and device.get('Connected'):
                      return {
+                                "device_path": path,
                                 "name": device.get("Name"),
                                 "address": device.get("Address"),
                                 "alias": device.get("Alias"),
                                 "icon": device.get("Icon"),
-                                "path": path,
                                 "connected":device.get("Connected")
                             }
 
 
-    def get_player(self, device_path):
+    def get_player(self):
         """Gets device media player information"""
+        player_path = None
+        get_connected_device = self.get_device()
+        
         try:
-            device = bus.get(bluez_service, f"{device_path}/player0")
-            device_player = [{
-                            "status": device.get("Status"),
-                            "device": device.get("Device"),
-                            "name": device.get("Name"),
-                            "track": device.get("Track"),
-                            "type": device.get("Type"),
-                            "position": device.get("Position"),
-                        }]
-            return device_player
+            mng_objs = mngr.GetManagedObjects()       
+            for path, interfaces in mng_objs.items():
+                if "org.bluez.MediaPlayer1" in interfaces:
+                     player_path = path
+
+            if player_path is not None and get_connected_device.get("device_path") in player_path:         
+                device = bus.get(bluez_service, player_path)
+                device_player = {
+                                "status": device.Status,
+                                "device_path": device.Device,
+                                "player_path": player_path,
+                                "name": device.Name,
+                                "track": device.Track,
+                                "type": device.Type,
+                                "position": device.Position,
+                            }
+                return device_player
         except Exception:
             return "Not supported on this device"
+        
 
     def device_trust(self, device_path):
         """Trusts a bluetooth devices with mac address"""
@@ -187,34 +223,63 @@ class BluetoothDbusController():
             return True
         except Exception:
                 raise RuntimeError(f"Failed to trust device {device_path}")
+
+    
+    def handle_incoming_device_request(self, incoming_device):
+        """Handles incoming bluetooth request"""
+        incoming_device_path = incoming_device.get("device_path")
+        self.device_trust(incoming_device_path)
+        devices = self.get_devices()
         
+        for device in devices:
+            device_path = device.get("device_path")
+            if device_path != incoming_device_path:
+                self.device_disconnect(device_path)
+
 
     def device_connect(self, device_path):
+        """Connects to bluetooth device with address."""
         try:
-            """Connects to bluetooth device with address."""
             logger.debug(f"Attempting to connect to {device_path}...")
-            device = bus.get(bluez_service, device_path)
-            device.Connect()
-            return True
+
+            get_new_device_path = None
+            get_new_device = self.get_device(device_path)
+            if get_new_device:
+                get_new_device_path = device_path
+
+            devices = self.get_devices()
+            for device in devices:
+                _device_path = device.get("device_path")
+                if _device_path and _device_path != get_new_device_path:
+                    self.device_disconnect(_device_path)
+
+            if get_new_device_path:
+                print(get_new_device_path)
+                device = bus.get(bluez_service, get_new_device_path)
+                self.device_trust(get_new_device_path)
+                device.Connect()
+            return get_new_device
+        
         except Exception:
             raise RuntimeError(f"Failed to connect device {device_path}")
 
 
     def device_disconnect(self, device_path):
+        """Disconnects a bluetooth device"""
         try:
-            """Disconnects a bluetooth device"""
-            logger.debug(f"Attempting to disconnect from {device_path}")
+            logger.debug(f"Disconnecting bluetooth device  {device_path}")
             device = bus.get(bluez_service, device_path)
-            device.Disconnect()
+            if hasattr(device, "Disconnect"):
+                device.Disconnect()
             return True
         except Exception:
             raise RuntimeError(f"Failed to disconnect device {device_path}")
         
 
     def device_remove(self, device_path):
+        """Removes a bluetooth devices."""
         try:
-            """Removes a bluetooth devices."""
-            logger.debug(f"Removing device {device_path}")
+            logger.debug(f"Removing bluetooth device {device_path}")
             adapter.RemoveDevice(device_path)
             return True
         except Exception:
@@ -224,35 +289,40 @@ class BluetoothDbusController():
     def player_stop(self, device_path):
         """Bluetooth device player Stop command"""
         device = bus.get(bluez_service, device_path)
-        device.Stop()
+        if hasattr(device, "Stop"):
+            device.Stop()
         return True
     
 
     def player_play(self, device_path):
         """Bluetooth device player Play command"""
         device = bus.get(bluez_service, device_path)
-        device.Play()
+        if hasattr(device, "Play"):
+            device.Play()
         return True
 
 
     def player_pause(self, device_path):
         """Bluetooth device player Pause command"""
         device = bus.get(bluez_service, device_path)
-        device.Pause()
+        if hasattr(device, "Pause"):
+            device.Pause()
         return True
 
 
     def player_prev(self, device_path):
         """Bluetooth device player Previous command"""
         device = bus.get(bluez_service, device_path)
-        device.Previous()
+        if hasattr(device, "Previous"):
+            device.Previous()
         return True
     
 
     def player_next(self, device_path):
         """Bluetooth device player Next command"""
         device = bus.get(bluez_service, device_path)
-        device.Next()
+        if hasattr(device, "Next"):
+            device.Next()
         return True
 
 

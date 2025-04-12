@@ -1,10 +1,6 @@
 import logging
 import pykka
-import subprocess
 import threading
-import os
-import time
-import re
 
 import tornado.escape
 import tornado.ioloop
@@ -14,17 +10,12 @@ import tornado.websocket
 from .bluez_dbus import BluetoothDbusController 
 
 import mopidy
-from mopidy.models import Album, Artist, Track, TlTrack
-from mopidy.types import PlaybackState, DurationMs
 from mopidy.core.listener import CoreListener
 from mopidy.core.actor import CoreProxy
 from mopidy.internal import jsonrpc
-
 from collections.abc import Awaitable
-from typing import ClassVar
 
 logger = logging.getLogger(__name__)
-
 
 
 class BluetoothManager(pykka.ThreadingActor, CoreListener):
@@ -32,18 +23,16 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
         super().__init__()
         self.config = config
         self.core = core
-        self.running = True
-        self.last_event = ""
-        self.uri= ""
         self.bluetooth_controller = BluetoothDbusController(core, config) #To be replaced with Python D-Bus Implementation in future.
-        self.dbus_thread = None
-        
+
 
     def on_event(self, event, **kwargs):
         """Handle Mopidy events"""
         print(f"Received event: {event} {kwargs}")
 
+
     def on_start(self):
+        self.bluetooth_controller.adapter_set_name(self.config['bluetooth-manager']['name'])
         threading.Thread(target=self.bluetooth_controller.start_dbus_listener(), daemon=True).start()
         logger.info("Bluetooth Manager: Initialized")
 
@@ -51,6 +40,7 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
 def make_jsonrpc_wrapper(core: CoreProxy, config) -> jsonrpc.Wrapper:
     return jsonrpc.Wrapper(
         objects={
+            "bluetooth.adapter.discoverable": BluetoothDbusController(core, config).set_discoverable,
             "bluetooth.adapter.discover": BluetoothDbusController(core, config).discover_devices,
             "bluetooth.devices": BluetoothDbusController(core, config).get_devices,
             "bluetooth.devices.info": BluetoothDbusController(core, config).get_device,
