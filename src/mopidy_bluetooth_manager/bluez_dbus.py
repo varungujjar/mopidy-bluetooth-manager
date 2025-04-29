@@ -2,7 +2,12 @@
 import logging
 import pydbus
 import time
+import subprocess
+import re
+
 from mopidy.core.listener import CoreListener
+from mopidy.models import Album, Artist, Track, TlTrack
+from mopidy.types import PlaybackState, DurationMs
 
 from gi.repository import GLib, GObject
 
@@ -26,7 +31,22 @@ class BluetoothDbusController():
         self.config = config
         self.core = core
         self.devices = []
+        self.track = None
+        self.track_mem = None
 
+    def set_track(self, _track = None):
+        _track_id = 1
+        track = Track(
+            name = _track.get("Title") if _track.get("Title") else 'Bluetooth',
+            artists = frozenset([Artist(name=_track.get("Artist"))]) if _track.get("Artist") else frozenset([Artist(name="Unknown")]),
+            album = Album(name=_track.get("Album")) if _track.get("Album") else None,
+            track_no =  int(_track.get("TrackNumber")) if _track.get("TrackNumber") is not None else None,
+            length = int(_track.get("Duration")) if _track.get("Duration") is not None else None,  
+        )
+        tl_track = TlTrack(_track_id, track=track)
+        self.track = tl_track
+        self.core.playback.set_metadata(tl_track)
+        CoreListener.send("track_playback_started", tl_track=tl_track)
 
     def on_properties_changed(self, *args):
         interface = args[1]
@@ -36,30 +56,46 @@ class BluetoothDbusController():
             properties = params[1]
 
             if "State" in properties:
-                CoreListener.send("playback_state_changed", state=properties["State"])
-           
+                CoreListener.send("options_changed", state=properties["State"])
+            
             if "Status" in properties:
-                CoreListener.send("playback_status_changed", status=properties["Status"])
+                # CoreListener.send("playback_status_changed", status=properties["Status"])
+                if (properties["Status"] == 'playing'):
+                    self.core.playback.set_state(PlaybackState.PLAYING)
+                if (properties["Status"] == 'paused'):
+                    self.core.playback.set_state(PlaybackState.PAUSED)
 
             if "Connected" in properties and not "Player" in properties:
                 value = properties.get("Connected")
+                self.core.playback.stop()
                 if value:
+                    # self.track_mem = self.core.playback.get_current_track()
                     CoreListener.send("network_status_changed", connected=value, device=self.get_device(interface))
-                    CoreListener.send("input_source_changed", source='bluetooth')
-                    print(interface, properties)
+                    CoreListener.send("options_changed", input='bluetooth')
+                    self.set_track({})
                     self.handle_incoming_device_request(self.get_device(interface))
                 else:
+                    self.core.playback.set_state(PlaybackState.STOPPED)
+                    self.core.playback.set_metadata(None)
+                    CoreListener.send("track_playback_ended")
                     CoreListener.send("network_status_changed", connected=value, device=self.get_device(interface))
                
             if "Track" in properties:
-                CoreListener.send("tracklist_changed", track=properties["Track"])
+                if self.track is not None:
+                    CoreListener.send("track_playback_ended", tl_track=self.track)
+                
+                _track = properties.get("Track")
+                if _track:
+                    self.set_track(_track)
 
             if "Volume" in properties:
                 CoreListener.send("volume_changed", volume=properties["Volume"])
 
             if "Discovering" in properties:
-                CoreListener.send("network_state_changed", discovering=properties["Discovering"])
-           
+                CoreListener.send("network_status_changed", discovering=properties["Discovering"])
+
+            if "Discoverable" in properties:
+                CoreListener.send("network_state_changed", discover=properties["Discoverable"])
 
 
     def start_dbus_listener(self):
@@ -68,6 +104,10 @@ class BluetoothDbusController():
             signal="PropertiesChanged",
             signal_fired=self.on_properties_changed
         )
+        connected_device = self.get_device()
+        if (connected_device):
+            self.set_track({})
+            CoreListener.send("options_changed", input='bluetooth')
 
 
     def adapter_power(self, state):
@@ -186,6 +226,68 @@ class BluetoothDbusController():
                             }
 
 
+    def parse_a2dp_config(self, codec, config):
+        if codec == 0:  # SBC
+            freq_map = {
+                0b10000000: 16000,
+                0b01000000: 32000,
+                0b00100000: 44100,
+                0b00010000: 48000
+            }
+            channel_map = {
+                0b00001000: "Mono",
+                0b00000100: "Dual Channel",
+                0b00000010: "Stereo",
+                0b00000001: "Joint Stereo"
+            }
+
+            freq = next((v for k, v in freq_map.items() if config[0] & k), None)
+            channel = next((v for k, v in channel_map.items() if config[0] & k), None)
+            return {"codec": "SBC", "rate": freq, "channels": channel}
+
+        elif codec == 2:  # AAC
+            freq_map = {
+                0x80: 8000, 0x40: 11025, 0x20: 12000, 0x10: 16000,
+                0x08: 22050, 0x04: 24000, 0x02: 32000, 0x01: 44100,
+                0x00: 48000  # fallback
+            }
+            rate_byte = config[1]
+            freq = freq_map.get(rate_byte & 0xFF, "Unknown")
+            return {"codec": "AAC", "rate": freq, "channels": "Unknown"}
+
+        return {"codec": f"Unknown ({codec})", "rate": "Unknown", "channels": "Unknown"}
+
+
+    def _get_audio_pcm_info(self, device_path):
+        try:
+            mng_objs = mngr.GetManagedObjects()      
+            for path in mng_objs:
+                device = mng_objs[path].get('org.bluez.MediaTransport1')
+                if device is not None and device.get('Device') == device_path:
+                    return self.parse_a2dp_config(device.get('Codec'), device.get('Configuration'))
+
+        except Exception as e:
+            return f"Error retrieving PCM info: {e}"
+        
+    
+    def get_audio_pcm_info(self):
+        try:
+            result = subprocess.check_output(["bluealsa-aplay", "-l"], text=True)
+            lines = result.splitlines()
+            for line in lines:
+                if "A2DP" in line:
+                    match = re.search(r"A2DP \((.*?)\): (.*?) (\d+) channels (\d+) Hz", line)
+                    if match:
+                        codec, fmt, channels, rate = match.groups()
+                        return {
+                            "codec": codec,
+                            "format": fmt,
+                            "channels": int(channels),
+                            "rate": int(rate)
+                        }
+        except Exception as e:
+            return {"error": str(e)}
+
     def get_player(self):
         """Gets device media player information"""
         player_path = None
@@ -254,7 +356,6 @@ class BluetoothDbusController():
                     self.device_disconnect(_device_path)
 
             if get_new_device_path:
-                print(get_new_device_path)
                 device = bus.get(bluez_service, get_new_device_path)
                 self.device_trust(get_new_device_path)
                 device.Connect()

@@ -28,7 +28,8 @@ class BluetoothManager(pykka.ThreadingActor, CoreListener):
 
     def on_event(self, event, **kwargs):
         """Handle Mopidy events"""
-        print(f"Received event: {event} {kwargs}")
+        if(event == 'options_changed'):
+            print(f"Received event: {event} {kwargs}")
 
 
     def on_start(self):
@@ -49,6 +50,7 @@ def make_jsonrpc_wrapper(core: CoreProxy, config) -> jsonrpc.Wrapper:
             "bluetooth.devices.trust": BluetoothDbusController(core, config).device_trust,
             "bluetooth.devices.remove": BluetoothDbusController(core, config).device_remove,
             "bluetooth.player": BluetoothDbusController(core, config).get_player,
+            "bluetooth.player_pcm": BluetoothDbusController(core, config).get_audio_pcm_info,
             "bluetooth.player.play": BluetoothDbusController(core, config).player_play,
             "bluetooth.player.pause": BluetoothDbusController(core, config).player_pause,
             "bluetooth.player.stop": BluetoothDbusController(core, config).player_stop,
